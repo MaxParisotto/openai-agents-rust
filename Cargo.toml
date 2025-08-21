@@ -9,7 +9,11 @@ homepage = "https://github.com/MaxParisotto/openai-agents-rust"
 documentation = "https://docs.rs/openai-agents-rust"
 readme = "README.md"
 keywords = ["openai", "agents", "llm", "ai", "tools"]
+categories = ["api-bindings", "asynchronous", "command-line-utilities"]
 include = ["src/**", "Cargo.toml", "README.md", "LICENSE", "DESIGN.md"]
+
+[badges]
+maintenance = { status = "actively-developed" }
 
 [dependencies]
 hyper = "1.0"
