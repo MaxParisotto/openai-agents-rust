@@ -1,5 +1,6 @@
-use tracing::{info, Level};
-use tracing_subscriber::{fmt, EnvFilter};
+use tracing::{Level, info};
+use tracing_subscriber::prelude::*;
+use tracing_subscriber::{EnvFilter, fmt};
 
 /// Initialize global tracing subscriber.
 ///
@@ -14,8 +15,7 @@ pub fn init_tracing() {
         .with_thread_names(true);
 
     // Use `EnvFilter` to enable dynamic log level control via `RUST_LOG`.
-    let filter_layer = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info"));
+    let filter_layer = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
     // Combine layers and set as the global default.
     tracing_subscriber::registry()

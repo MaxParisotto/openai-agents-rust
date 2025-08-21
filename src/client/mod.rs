@@ -1,3 +1,5 @@
+mod request;
+
 use crate::config::Config;
 use crate::error::AgentError;
 use crate::client::request::{ChatRequest, ChatResponse};

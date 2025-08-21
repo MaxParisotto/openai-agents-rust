@@ -72,20 +72,7 @@ Environment variables can override any key using the `OPENAI_AGENTS_<UPPERCASE_K
 ## 5. Dependency List (Cargo.toml)
 
 ```toml
-[dependencies]
-tokio = { version = "1.38", features = ["full"] }
-async-trait = "0.1.74"
-serde = { version = "1.0.210", features = ["derive"] }
-serde_yaml = "0.9.34"
-serde_json = "1.0.128"
-config = "0.14.0"
-clap = { version = "4.5.8", features = ["derive"] }
-thiserror = "1.0.63"
-log = "0.4.22"
-env_logger = "0.11.5"
-reqwest = { version = "0.12.5", features = ["json", "rustls-tls", "stream"] }
-libloading = "0.8.3"
-anyhow = "1.0.86"
+to be updated with the current values
 ```
 
 ## 6. Data Flow Diagram

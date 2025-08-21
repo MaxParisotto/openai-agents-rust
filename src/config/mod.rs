@@ -16,21 +16,18 @@ pub use schema::Config;
 /// Returns `AgentError` if the file cannot be read, parsed, or if required fields
 /// are missing.
 pub fn load_from_path<P: AsRef<Path>>(path: P) -> Result<Config, AgentError> {
-    // Initialize a new config loader
-    let mut settings = ConfigLoader::default();
+    // Build a config loader using the builder API (the `merge` method was removed in recent versions).
+    let builder = ConfigLoader::builder()
+        .add_source(File::with_name(path.as_ref().to_str().ok_or_else(
+            || AgentError::Other("Invalid config file path".to_string()),
+        )?))
+        .add_source(Environment::with_prefix("OPENAI_AGENTS").separator("_"));
 
-    // Load from the specified file (YAML or JSON). The `File` source automatically
-    // detects the format based on the file extension.
-    settings.merge(File::with_name(
-        path.as_ref()
-            .to_str()
-            .ok_or_else(|| AgentError::Other("Invalid config file path".to_string()))?,
-    ))?;
-
-    // Merge in environment variables with the prefix `OPENAI_AGENTS_`.
-    // This allows overrides like `OPENAI_AGENTS_API_KEY=...`.
-    settings.merge(Environment::with_prefix("OPENAI_AGENTS").separator("_"))?;
-
-    // Deserialize into our strongly‑typed `Config` struct.
-    settings.try_into().map_err(|e| AgentError::Other(format!("Config error: {}", e)))
+    // Build the configuration and deserialize into our strongly‑typed `Config` struct.
+    let settings = builder
+        .build()
+        .map_err(|e| AgentError::Other(format!("Config build error: {}", e)))?;
+    settings
+        .try_deserialize::<Config>()
+        .map_err(|e| AgentError::Other(format!("Config error: {}", e)))
 }

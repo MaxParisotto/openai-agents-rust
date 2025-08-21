@@ -16,11 +16,19 @@ pub enum AgentError {
     SerdeError(#[from] serde_json::Error),
 
     #[error("YAML error: {0}")]
-    YamlError(#[from] serde_yaml::Error),
+    YamlError(#[from] rust_yaml::Error),
 
     #[error("Plugin loading error: {0}")]
     PluginError(String),
 
     #[error("Other error: {0}")]
     Other(String),
+}
+
+// Allow `AgentError` to be used directly as an Axum response.
+impl axum::response::IntoResponse for AgentError {
+    fn into_response(self) -> axum::response::Response {
+        let body = axum::Json(serde_json::json!({ "error": self.to_string() }));
+        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, body).into_response()
+    }
 }
