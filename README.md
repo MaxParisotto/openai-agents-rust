@@ -1,5 +1,9 @@
 # OpenAI Agents (Rust)
 
+[![Crates.io](https://img.shields.io/crates/v/openai-agents-rust.svg)](https://crates.io/crates/openai-agents-rust)
+[![Docs.rs](https://docs.rs/openai-agents-rust/badge.svg)](https://docs.rs/openai-agents-rust)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
+
 Harmony-aligned, OpenAI-compatible agent orchestration in Rust — no mocks, no automatic fallbacks.
 
 This crate provides a library and CLI to build agents that call OpenAI-compatible models (cloud or OSS) with robust tool orchestration, optional realtime/voice support, and an environment-first configuration model. It aims for practical parity with the Python SDK while staying idiomatic in Rust.
@@ -13,6 +17,13 @@ This crate provides a library and CLI to build agents that call OpenAI-compatibl
 - Extensible: dynamic plugin system and a simple tool registry.
 
 ## Quickstart
+
+Install:
+
+```toml
+[dependencies]
+openai-agents-rust = "0.1"
+```
 
 1. Create a .env with your model server details (base_url is required):
 
@@ -43,6 +54,23 @@ By default, the MCP server binds to <http://127.0.0.1:8080> and the runtime regi
 
 - EchoAgent (simple example that calls your configured model)
 - A configured agent using the experimental realtime model
+
+Minimal example (library):
+
+```rust
+use openai_agents_rust::agent::register_default_agent;
+use openai_agents_rust::agent::runtime::AgentRuntime;
+use openai_agents_rust::config::load_from_env;
+
+#[tokio::main]
+async fn main() -> Result<(), openai_agents_rust::error::AgentError> {
+  let _ = dotenvy::dotenv();
+  let cfg = load_from_env();
+  let mut rt = AgentRuntime::new(cfg);
+  register_default_agent(&mut rt);
+  rt.start().await
+}
+```
 
 ## Configuration
 
