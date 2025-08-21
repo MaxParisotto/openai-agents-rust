@@ -2,4 +2,6 @@
 /openai-agents-python
 /.venv
 /gpt-oss
+/.mypy_cache
+/.pytest_cache
 

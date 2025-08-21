@@ -1,3 +1,4 @@
+pub mod gpt_oss_responses;
 pub mod litellm;
 pub mod openai_chat;
 pub mod openai_realtime;
@@ -85,6 +86,7 @@ pub struct ToolCall {
     pub id: Option<String>,
     pub name: String,
     pub arguments: String,
+    pub call_id: Option<String>,
 }
 
 /// Streamed event variants.

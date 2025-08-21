@@ -60,6 +60,7 @@ struct ToolCallJson {
     #[serde(rename = "type")]
     _type: Option<String>,
     id: Option<String>,
+    call_id: Option<String>,
     function: Option<FunctionCall>,
 }
 #[derive(Deserialize)]
@@ -93,6 +94,7 @@ fn parse_chat_completion(body: ChatCompletion) -> ModelResponse {
                             serde_json::Value::String(s) => s,
                             other => other.to_string(),
                         },
+                        call_id: tc.call_id,
                     });
                 }
             }
@@ -105,6 +107,7 @@ fn parse_chat_completion(body: ChatCompletion) -> ModelResponse {
                     serde_json::Value::String(s) => s,
                     other => other.to_string(),
                 },
+                call_id: None,
             });
         }
     }

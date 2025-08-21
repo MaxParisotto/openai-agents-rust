@@ -135,6 +135,7 @@ impl Model for LiteLLM {
             #[serde(rename = "type")]
             _type: Option<String>,
             id: Option<String>,
+            call_id: Option<String>,
             function: Option<FunctionCall>,
         }
         #[derive(Deserialize)]
@@ -176,6 +177,7 @@ impl Model for LiteLLM {
                                         serde_json::Value::String(s) => s,
                                         other => other.to_string(),
                                     },
+                                    call_id: tc.call_id,
                                 });
                             }
                         }
@@ -187,6 +189,7 @@ impl Model for LiteLLM {
                                 serde_json::Value::String(s) => s,
                                 other => other.to_string(),
                             },
+                            call_id: None,
                         });
                     }
                 }

@@ -164,6 +164,7 @@ impl Runner {
                         "id": tc.id,
                         "type": "function",
                         "function": {"name": tc.name, "arguments": tc.arguments},
+                        "call_id": tc.call_id,
                     })).collect::<Vec<_>>()
                 }));
             } else {
@@ -179,17 +180,18 @@ impl Runner {
 
             // Execute requested tool calls if available.
             let mut executed_any_tool = false;
-            for tc in resp.tool_calls {
+        for tc in resp.tool_calls {
                 if let Some(tool) = ctx.tools.get_by_name(&tc.name) {
                     if tool.is_enabled(ctx).await {
                         let out = tool
                             .call_with_context(ctx, tc.id.as_deref(), &tc.arguments)
                             .await?;
                         // Append a proper tool message for the next model turn.
-                        if tc.id.is_some() {
+            let link_id = tc.call_id.clone().or(tc.id.clone());
+            if link_id.is_some() {
                             messages.push(json!({
                                 "role": "tool",
-                                "tool_call_id": tc.id,
+                "tool_call_id": link_id,
                                 "content": out
                             }));
                         } else {
