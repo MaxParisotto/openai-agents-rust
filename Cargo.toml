@@ -2,6 +2,14 @@
 name = "openai-agents-rust"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "Harmony-aligned, OpenAI-compatible agent orchestration in Rust with tools, realtime, and voice."
+repository = "https://github.com/MaxParisotto/openai-agents-rust"
+homepage = "https://github.com/MaxParisotto/openai-agents-rust"
+documentation = "https://docs.rs/openai-agents-rust"
+readme = "README.md"
+keywords = ["openai", "agents", "llm", "ai", "tools"]
+include = ["src/**", "Cargo.toml", "README.md", "LICENSE", "DESIGN.md"]
 
 [dependencies]
 hyper = "1.0"
