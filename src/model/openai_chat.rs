@@ -260,139 +260,40 @@ impl Model for OpenAiChat {
             req1 = req1.bearer_auth(token);
         }
         let resp1 = req1.json(&payload).send().await.map_err(AgentError::from)?;
-        let mut status = resp1.status();
-        let mut body_text = resp1.text().await.map_err(AgentError::from)?;
-        debug!(target: "openai_chat", "first attempt status={} have_tools={}", status, have_tools);
-
-        // Fallbacks for tool-related server errors
-        debug!(target: "openai_chat", "fallback check: success={} have_tools={}", status.is_success(), have_tools);
-        if !status.is_success() && have_tools {
-            tracing::debug!(
-                target = "openai_chat",
-                "entering fallback path; initial status={}",
-                status
-            );
-            // Legacy functions/function_call attempt
-            let mut functions: Vec<serde_json::Value> = Vec::new();
-            if let Some(tlist) = tools {
-                for tool in tlist.iter() {
-                    if let Some(obj) = tool.as_object() {
-                        if obj.get("type").and_then(|v| v.as_str()) == Some("function") {
-                            if let Some(func) = obj.get("function") {
-                                functions.push(func.clone());
-                            }
-                        }
-                    }
-                }
-            }
-            tracing::debug!(
-                target = "openai_chat",
-                functions_len = functions.len(),
-                "built legacy functions list"
-            );
-            if !functions.is_empty() {
-                let legacy_payload = serde_json::json!({
-                    "model": self.config.model,
-                    "messages": payload["messages"].clone(),
-                    "functions": serde_json::Value::Array(functions),
-                    "function_call": "auto",
-                    "max_tokens": 512,
-                    "temperature": 0.2,
-                });
-                if var_bool("VLLM_DEBUG_PAYLOAD", false) {
-                    if let Ok(pretty) = serde_json::to_string_pretty(&legacy_payload) {
-                        tracing::debug!(target: "openai_chat", payload = %pretty, "legacy payload");
-                    }
-                }
-                let mut legacy_req = self.client.post(&url);
-                if let Some(token) = &self.auth_token {
-                    legacy_req = legacy_req.bearer_auth(token);
-                }
-                let resp2 = legacy_req
-                    .json(&legacy_payload)
-                    .send()
-                    .await
-                    .map_err(AgentError::from)?;
-                let status2 = resp2.status();
-                let body_text2 = resp2.text().await.map_err(AgentError::from)?;
-                tracing::debug!(target = "openai_chat", status = %status2, "legacy functions attempt complete");
-                status = status2;
-                body_text = body_text2;
-            }
-
-            // No-tools retry as last resort
-            if !status.is_success() {
-                let retry_payload = serde_json::json!({
-                    "model": self.config.model,
-                    "messages": payload["messages"].clone(),
-                    "max_tokens": 512,
-                    "temperature": 0.2,
-                });
-                if var_bool("VLLM_DEBUG_PAYLOAD", false) {
-                    if let Ok(pretty) = serde_json::to_string_pretty(&retry_payload) {
-                        tracing::debug!(target: "openai_chat", payload = %pretty, "retry payload (no tools)");
-                    }
-                }
-                let mut retry_req = self.client.post(&url);
-                if let Some(token) = &self.auth_token {
-                    retry_req = retry_req.bearer_auth(token);
-                }
-                let resp3 = retry_req
-                    .json(&retry_payload)
-                    .send()
-                    .await
-                    .map_err(AgentError::from)?;
-                let status3 = resp3.status();
-                let body_text3 = resp3.text().await.map_err(AgentError::from)?;
-                tracing::debug!(target = "openai_chat", status = %status3, "no-tools retry attempt complete");
-                status = status3;
-                body_text = body_text3;
-            }
-        }
-
+        let status = resp1.status();
+        let body_text = resp1.text().await.map_err(AgentError::from)?;
+        debug!(target: "openai_chat", "request completed status={} have_tools={}", status, have_tools);
         if !status.is_success() {
             let truncated = if body_text.len() > 2000 {
                 format!("{}...<truncated>", &body_text[..2000])
             } else {
-                body_text
+                body_text.clone()
             };
-            debug!(target: "openai_chat", %status, model = %self.config.model, have_tools = %have_tools, error = %truncated, "chat.completions error");
             return Err(AgentError::Other(format!(
-                "HTTP {} error: {}",
-                status, truncated
+                "chat.completions failed (status: {}). The server returned an error while tools={} force_functions={}. No automatic retries are performed. Verify the endpoint supports your requested schema (tool_calls vs functions) or adjust config (e.g., VLLM_FORCE_FUNCTIONS, VLLM_TOOL_CHOICE). Response body: {}",
+                status,
+                if have_tools { "enabled" } else { "disabled" },
+                if var_bool("VLLM_FORCE_FUNCTIONS", false) {
+                    "on"
+                } else {
+                    "off"
+                },
+                truncated
             )));
         }
 
         match serde_json::from_str::<ChatCompletion>(&body_text) {
             Ok(body) => Ok(parse_chat_completion(body)),
-            Err(_) => {
-                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body_text) {
-                    let text = v
-                        .get("choices")
-                        .and_then(|c| c.as_array())
-                        .and_then(|arr| arr.get(0))
-                        .and_then(|c0| {
-                            c0.get("message")
-                                .and_then(|m| m.get("content"))
-                                .and_then(|t| t.as_str())
-                                .map(|s| s.to_string())
-                                .or_else(|| {
-                                    c0.get("text")
-                                        .and_then(|t| t.as_str())
-                                        .map(|s| s.to_string())
-                                })
-                        });
-                    return Ok(ModelResponse {
-                        id: None,
-                        text,
-                        tool_calls: vec![],
-                    });
-                }
-                Ok(ModelResponse {
-                    id: None,
-                    text: Some(body_text),
-                    tool_calls: vec![],
-                })
+            Err(e) => {
+                let truncated = if body_text.len() > 2000 {
+                    format!("{}...<truncated>", &body_text[..2000])
+                } else {
+                    body_text
+                };
+                Err(AgentError::Other(format!(
+                    "Failed to parse chat.completions response: {}. Expected OpenAI chat format with choices[0].message. Body: {}",
+                    e, truncated
+                )))
             }
         }
     }

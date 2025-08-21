@@ -60,7 +60,7 @@ src/
 
 ```yaml
 api_key: "<YOUR_OPENAI_API_KEY>"
-model: "gpt-4o-mini"
+model: "OPENAI_AGENTS__MODEL"
 log_level: "info"
 plugins_path: "~/.config/openai_agents/plugins"
 # optional overrides
@@ -103,7 +103,7 @@ flowchart TD
 ## 9. Testing Strategy
 
 - Unit tests for each module under `src/**/*.rs` using `#[cfg(test)]`.
-- Integration tests in `tests/` exercising the full CLI flow with a mock OpenAI server (e.g., `wiremock`).
+- Integration tests in `tests/` exercising the full CLI flow with a local vLLM OpenAI Compatible server
 
 ## 10. Build & Release
 

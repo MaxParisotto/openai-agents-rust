@@ -25,12 +25,8 @@ impl LiteLLM {
         } else {
             Some(config.api_key.clone())
         };
-        Self {
-            client,
-            config,
-            base_url: "https://api.openai.com/v1".to_string(),
-            auth_token,
-        }
+    let base_url = config.base_url.clone();
+    Self { client, config, base_url, auth_token }
     }
 
     /// Override the base URL (e.g., http://192.168.3.40:8000/v1)

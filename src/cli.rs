@@ -1,7 +1,7 @@
-use clap::Parser;
-use crate::config::Config;
 use crate::agent::AgentRuntime;
+use crate::config::Config;
 use crate::error::AgentError;
+use clap::Parser;
 
 /// Command‑line interface for the OpenAI Agents crate.
 #[derive(Parser, Debug)]
@@ -16,6 +16,8 @@ pub struct Cli {
 /// creates the runtime and starts it.
 pub async fn run() -> Result<(), AgentError> {
     let cli = Cli::parse();
+    // Load .env for local runs
+    let _ = dotenvy::dotenv();
     let config = Config::load_from_path(&cli.config)?;
     let runtime = AgentRuntime::new(config);
     runtime.start().await?;

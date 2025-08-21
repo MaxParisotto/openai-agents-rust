@@ -31,7 +31,7 @@ pub trait Model: Send + Sync {
         _previous_response_id: Option<&str>,
         _prompt_config: Option<&str>,
     ) -> Result<ModelResponse, AgentError> {
-        // Fallback: collapse into a single prompt string.
+        // Default behavior: collapse into a single prompt string.
         let text = if let Some(messages) = _messages {
             // Try to find the last user message content as prompt.
             let last_user = messages.iter().rev().find_map(|m| {

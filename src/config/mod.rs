@@ -1,4 +1,5 @@
 use crate::error::AgentError;
+use crate::utils::env::var_nonempty;
 use config::{Config as ConfigLoader, Environment, File};
 use std::path::Path;
 
@@ -33,7 +34,49 @@ pub fn load_from_path<P: AsRef<Path>>(path: P) -> Result<Config, AgentError> {
     let settings = builder
         .build()
         .map_err(|e| AgentError::Other(format!("Config build error: {}", e)))?;
-    settings
+    let mut cfg = settings
         .try_deserialize::<Config>()
-        .map_err(|e| AgentError::Other(format!("Config error: {}", e)))
+        .map_err(|e| AgentError::Other(format!("Config error: {}", e)))?;
+    apply_env_overrides(&mut cfg);
+    Ok(cfg)
+}
+
+/// Load configuration purely from environment variables (after .env is loaded by the caller).
+/// Priority:
+/// - OPENAI_MODEL, OPENAI_API_KEY, OPENAI_BASE_URL, RUST_LOG
+///
+/// Note: No provider defaults are applied here. Missing variables remain empty
+/// and should be handled by callers or higher-level config files.
+pub fn load_from_env() -> Config {
+    let mut cfg = Config {
+        api_key: String::new(),
+        model: var_nonempty("OPENAI_MODEL").unwrap_or_default(),
+        base_url: var_nonempty("OPENAI_BASE_URL").unwrap_or_default(),
+        log_level: std::env::var("RUST_LOG").unwrap_or_else(|_| "info".to_string()),
+        plugins_path: schema::default_plugins_path(),
+        max_concurrent_requests: None,
+    };
+    if let Some(k) = var_nonempty("OPENAI_API_KEY") {
+        cfg.api_key = k;
+    }
+    apply_env_overrides(&mut cfg);
+    cfg
+}
+
+/// Apply generic provider environment overrides on top of a loaded Config.
+fn apply_env_overrides(cfg: &mut Config) {
+    if let Some(k) = var_nonempty("OPENAI_API_KEY") {
+        cfg.api_key = k;
+    }
+    if let Some(u) = var_nonempty("OPENAI_BASE_URL") {
+        cfg.base_url = u;
+    }
+    if let Some(m) = var_nonempty("OPENAI_MODEL") {
+        cfg.model = m;
+    }
+    if let Ok(lvl) = std::env::var("RUST_LOG") {
+        if !lvl.trim().is_empty() {
+            cfg.log_level = lvl;
+        }
+    }
 }

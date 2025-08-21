@@ -10,7 +10,6 @@ pub struct Config {
     /// Model name to use (e.g., "gpt-4o-mini").
     pub model: String,
     /// Base URL for OpenAI-compatible API (e.g., "https://api.openai.com/v1" or local OSS server).
-    #[serde(default = "default_base_url")]
     pub base_url: String,
     /// Logging level (e.g., "info", "debug").
     pub log_level: String,
@@ -22,14 +21,10 @@ pub struct Config {
     pub max_concurrent_requests: Option<usize>,
 }
 
-fn default_plugins_path() -> PathBuf {
+pub(crate) fn default_plugins_path() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".config")
         .join("openai_agents")
         .join("plugins")
-}
-
-fn default_base_url() -> String {
-    "https://api.openai.com/v1".to_string()
 }
