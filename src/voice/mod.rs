@@ -26,6 +26,11 @@ pub trait Tts: Send + Sync {
 /// Example implementation that simply echoes the input.
 pub struct DummyVoicePipeline;
 
+/// Dummy implementation of the Speech‑to‑Text trait.
+pub struct DummyStt;
+
+/// Dummy implementation of the Text‑to‑Speech trait.
+pub struct DummyTts;
 #[async_trait]
 impl VoicePipeline for DummyVoicePipeline {
     async fn transcribe(&self, audio: &[u8]) -> Result<String, AgentError> {
@@ -35,6 +40,22 @@ impl VoicePipeline for DummyVoicePipeline {
 
     async fn synthesize(&self, text: &str) -> Result<Vec<u8>, AgentError> {
         // In a real implementation you would call a TTS service.
+        Ok(text.as_bytes().to_vec())
+    }
+}
+
+#[async_trait]
+impl Stt for DummyStt {
+    async fn stt(&self, audio: &[u8]) -> Result<String, AgentError> {
+        // Simple echo implementation for STT.
+        Ok(String::from_utf8_lossy(audio).to_string())
+    }
+}
+
+#[async_trait]
+impl Tts for DummyTts {
+    async fn tts(&self, text: &str) -> Result<Vec<u8>, AgentError> {
+        // Simple echo implementation for TTS.
         Ok(text.as_bytes().to_vec())
     }
 }

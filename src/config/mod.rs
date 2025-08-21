@@ -18,10 +18,16 @@ pub use schema::Config;
 pub fn load_from_path<P: AsRef<Path>>(path: P) -> Result<Config, AgentError> {
     // Build a config loader using the builder API (the `merge` method was removed in recent versions).
     let builder = ConfigLoader::builder()
-        .add_source(File::with_name(path.as_ref().to_str().ok_or_else(
-            || AgentError::Other("Invalid config file path".to_string()),
-        )?))
-        .add_source(Environment::with_prefix("OPENAI_AGENTS").separator("_"));
+        .add_source(
+            File::with_name(
+                path.as_ref()
+                    .to_str()
+                    .ok_or_else(|| AgentError::Other("Invalid config file path".to_string()))?,
+            )
+            .required(false),
+        )
+        // Use "__" as separator so single underscores remain intact (e.g., BASE_URL -> base_url)
+        .add_source(Environment::with_prefix("OPENAI_AGENTS").separator("__"));
 
     // Build the configuration and deserialize into our strongly‑typed `Config` struct.
     let settings = builder

@@ -2,6 +2,7 @@ use crate::client::OpenAiClient;
 use crate::config::Config;
 use crate::error::AgentError;
 use crate::plugin::loader::PluginRegistry;
+use crate::tools::registry::ToolRegistry;
 use async_trait::async_trait;
 use std::sync::Arc;
 
@@ -17,4 +18,5 @@ pub struct AgentContext {
     pub config: Arc<Config>,
     pub client: Arc<OpenAiClient>,
     pub plugins: Arc<PluginRegistry>,
+    pub tools: Arc<ToolRegistry>,
 }

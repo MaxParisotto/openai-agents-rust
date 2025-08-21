@@ -1,7 +1,7 @@
 use crate::plugin::traits::Plugin;
-use std::sync::Arc;
-use std::path::Path;
 use libloading;
+use std::path::Path;
+use std::sync::Arc;
 
 /// Simple plugin registry that holds a list of plugins.
 pub struct PluginRegistry {
@@ -37,7 +37,7 @@ impl PluginRegistry {
     /// (`.so` on Linux, `.dylib` on macOS). Each library is expected to expose a
     /// C‑compatible symbol named `plugin_create` with the signature:
     ///
-    /// ```rust
+    /// ```text
     /// unsafe extern "C" fn() -> *mut dyn Plugin
     /// ```
     ///
@@ -47,13 +47,11 @@ impl PluginRegistry {
     /// leaked (`std::mem::forget`) to keep it alive for the duration of the
     /// program; a production implementation would store the `Library` handles
     /// inside the registry to manage their lifetimes.
-    pub fn load_from_dir<P: AsRef<Path>>(
-        path: P,
-    ) -> Result<Self, crate::error::AgentError> {
+    pub fn load_from_dir<P: AsRef<Path>>(path: P) -> Result<Self, crate::error::AgentError> {
         let mut registry = Self::new();
 
-        let entries = std::fs::read_dir(&path)
-            .map_err(|e| crate::error::AgentError::Other(e.to_string()))?;
+        let entries =
+            std::fs::read_dir(&path).map_err(|e| crate::error::AgentError::Other(e.to_string()))?;
 
         for entry in entries {
             let entry = entry.map_err(|e| crate::error::AgentError::Other(e.to_string()))?;

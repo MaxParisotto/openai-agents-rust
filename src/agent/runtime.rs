@@ -3,6 +3,7 @@ use crate::client::OpenAiClient;
 use crate::config::Config;
 use crate::error::AgentError;
 use crate::plugin::loader::PluginRegistry;
+use crate::tools::registry::ToolRegistry;
 use std::sync::Arc;
 
 /// Runtime that holds a collection of agents and executes them.
@@ -11,6 +12,7 @@ pub struct AgentRuntime {
     pub config: Arc<Config>,
     pub client: Arc<OpenAiClient>,
     pub plugins: Arc<PluginRegistry>,
+    pub tools: Arc<ToolRegistry>,
 }
 
 impl AgentRuntime {
@@ -22,11 +24,20 @@ impl AgentRuntime {
             PluginRegistry::load_from_dir(&config.plugins_path)
                 .unwrap_or_else(|_| PluginRegistry::new()),
         );
+        let mut tools = ToolRegistry::new();
+        // Demo tool – uppercase
+        tools.register(crate::tools::function::FunctionTool::new(
+            "uppercase",
+            "Uppercase the input string",
+            |s| Ok(s.to_uppercase()),
+        ));
+
         Self {
             agents: Vec::new(),
             config,
             client,
             plugins,
+            tools: Arc::new(tools),
         }
     }
 
@@ -41,6 +52,7 @@ impl AgentRuntime {
             config: Arc::clone(&self.config),
             client: Arc::clone(&self.client),
             plugins: Arc::clone(&self.plugins),
+            tools: Arc::clone(&self.tools),
         };
         for agent in &self.agents {
             agent.run(&ctx).await?;

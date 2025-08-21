@@ -1,17 +1,17 @@
+pub mod configured;
+pub mod runner;
 pub mod runtime;
 pub mod traits;
+pub mod types;
 
+pub use runner::{Runner, ToolUseBehavior};
 pub use runtime::AgentRuntime;
 pub use traits::{Agent, AgentContext};
+pub use types::AgentConfig;
 
 use async_trait::async_trait;
-use std::sync::Arc;
 
-use crate::{
-    model::openai_chat::OpenAiChat,
-    model::Model,
-    error::AgentError,
-};
+use crate::{error::AgentError, model::Model, model::openai_chat::OpenAiChat};
 
 /// Simple echo agent that forwards a fixed prompt to a model.
 pub struct EchoAgent {
@@ -38,4 +38,9 @@ pub fn register_default_agent(runtime: &mut AgentRuntime) {
     let model = Box::new(OpenAiChat::new((*runtime.config).clone()));
     let agent = EchoAgent::new(model);
     runtime.register(agent);
+
+    // Also register a configured agent using the realtime placeholder model.
+    let rt_model = crate::model::openai_realtime::OpenAiRealtime::new((*runtime.config).clone());
+    let configured = crate::agent::configured::ConfiguredAgent::new("configured", rt_model);
+    runtime.register(configured);
 }

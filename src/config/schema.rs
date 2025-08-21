@@ -4,10 +4,14 @@ use std::path::PathBuf;
 /// Configuration schema for the OpenAI Agents crate.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Config {
-    /// OpenAI API key.
+    /// OpenAI API key (optional if using local/unauthenticated endpoint).
+    #[serde(default)]
     pub api_key: String,
     /// Model name to use (e.g., "gpt-4o-mini").
     pub model: String,
+    /// Base URL for OpenAI-compatible API (e.g., "https://api.openai.com/v1" or local OSS server).
+    #[serde(default = "default_base_url")]
+    pub base_url: String,
     /// Logging level (e.g., "info", "debug").
     pub log_level: String,
     /// Directory where plugins are stored.
@@ -24,4 +28,8 @@ fn default_plugins_path() -> PathBuf {
         .join(".config")
         .join("openai_agents")
         .join("plugins")
+}
+
+fn default_base_url() -> String {
+    "https://api.openai.com/v1".to_string()
 }
