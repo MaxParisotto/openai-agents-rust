@@ -1,7 +1,6 @@
 use crate::plugin::traits::Plugin;
 use libloading;
 use std::path::Path;
-use std::sync::Arc;
 
 /// Simple plugin registry that holds a list of plugins.
 pub struct PluginRegistry {

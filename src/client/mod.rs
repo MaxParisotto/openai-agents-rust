@@ -16,7 +16,7 @@ impl OpenAiClient {
     /// Create a new client from the given configuration.
     pub fn new(config: Config) -> Self {
         let http = Client::builder()
-            .user_agent("openai-agents-rust") // TODO: ensure the OpenAiClient respects Config.base_url if/when used for direct calls.
+            .user_agent("openai-agents-rust")
             .build()
             .expect("Failed to build reqwest client");
         Self {

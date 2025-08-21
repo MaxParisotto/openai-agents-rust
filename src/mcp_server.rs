@@ -9,8 +9,8 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use std::{net::SocketAddr, sync::Arc};
-use tokio::sync::broadcast::{self, Receiver, Sender};
 use tokio::net::TcpListener;
+use tokio::sync::broadcast::{Receiver, Sender};
 
 use crate::{
     client::OpenAiClient,
@@ -51,7 +51,9 @@ async fn run_handler(
     // Instantiate the requested model.
     let model: Box<dyn Model> = match payload.model.as_str() {
         "openai_chat" => Box::new(model::openai_chat::OpenAiChat::new((*state.config).clone())),
-        "openai_realtime" => Box::new(model::openai_realtime::OpenAiRealtime::new((*state.config).clone())),
+        "openai_realtime" => Box::new(model::openai_realtime::OpenAiRealtime::new(
+            (*state.config).clone(),
+        )),
         "litellm" => Box::new(model::litellm::LiteLLM::new((*state.config).clone())),
         _ => {
             return Err(AgentError::Other(format!(

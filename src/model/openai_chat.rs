@@ -4,6 +4,7 @@ use crate::model::{Model, ModelResponse, ToolCall};
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
+use tracing::debug;
 
 /// Simple OpenAI Chat model implementation.
 pub struct OpenAiChat {
@@ -51,7 +52,8 @@ impl OpenAiChat {
 #[derive(Deserialize)]
 struct FunctionCall {
     name: String,
-    arguments: String,
+    // Some servers return a JSON object instead of a stringified JSON.
+    arguments: serde_json::Value,
 }
 #[derive(Deserialize)]
 struct ToolCallJson {
@@ -64,6 +66,8 @@ struct ToolCallJson {
 struct Message {
     content: Option<String>,
     tool_calls: Option<Vec<ToolCallJson>>,
+    // Legacy function_call support (pre-tool_calls schema)
+    function_call: Option<FunctionCall>,
 }
 #[derive(Deserialize)]
 struct Choice {
@@ -85,10 +89,23 @@ fn parse_chat_completion(body: ChatCompletion) -> ModelResponse {
                     tool_calls.push(ToolCall {
                         id: tc.id,
                         name: func.name,
-                        arguments: func.arguments,
+                        arguments: match func.arguments {
+                            serde_json::Value::String(s) => s,
+                            other => other.to_string(),
+                        },
                     });
                 }
             }
+        } else if let Some(func) = first.message.function_call {
+            // Legacy single function call
+            tool_calls.push(ToolCall {
+                id: None,
+                name: func.name,
+                arguments: match func.arguments {
+                    serde_json::Value::String(s) => s,
+                    other => other.to_string(),
+                },
+            });
         }
     }
     ModelResponse {
@@ -103,15 +120,14 @@ impl Model for OpenAiChat {
     /// Sends a chat completion request to the OpenAI API.
     async fn generate(&self, prompt: &str) -> Result<String, AgentError> {
         let url = format!("{}/chat/completions", self.base_url);
-        let mut req = self.client.post(&url);
+        let mut rb = self.client.post(&url);
         if let Some(token) = &self.auth_token {
-            req = req.bearer_auth(token);
+            rb = rb.bearer_auth(token);
         }
-        let resp = req
+        let resp = rb
             .json(&serde_json::json!({
                 "model": self.config.model,
                 "messages": [{ "role": "user", "content": prompt }],
-                "max_tokens": 512,
             }))
             .send()
             .await
@@ -149,31 +165,240 @@ impl Model for OpenAiChat {
             msgs.push(serde_json::json!({"role": "user", "content": input}));
         }
 
-        let mut req = self.client.post(&url);
-        if let Some(token) = &self.auth_token {
-            req = req.bearer_auth(token);
-        }
-        let resp = req
-            .json(&{
-                let mut payload = serde_json::json!({
-                    "model": self.config.model,
-                    "messages": msgs,
-                    "max_tokens": 512,
-                });
-                if let Some(t) = tools {
-                    payload["tools"] = serde_json::Value::Array(t.to_vec());
-                }
-                if let Some(choice) = tool_choice {
-                    payload["tool_choice"] = choice;
-                }
-                payload
-            })
-            .send()
-            .await
-            .map_err(AgentError::from)?;
+        // Env toggles for compatibility
+        let minimal_payload = std::env::var("VLLM_MIN_PAYLOAD")
+            .ok()
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        let force_functions = std::env::var("VLLM_FORCE_FUNCTIONS")
+            .ok()
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        // Default to enabling parallel tool calls for Harmony unless explicitly disabled
+        let disable_parallel = std::env::var("VLLM_DISABLE_PARALLEL_TOOL_CALLS")
+            .ok()
+            .map(|v| v == "1")
+            .unwrap_or(false);
+        // Optional override: Values: "auto", "none", "object:auto", "object:none"
+        let tool_choice_override = std::env::var("VLLM_TOOL_CHOICE").ok();
 
-        let body: ChatCompletion = resp.json().await.map_err(AgentError::from)?;
-        Ok(parse_chat_completion(body))
+        // Prepare payload
+        let mut payload = if minimal_payload {
+            serde_json::json!({
+                "model": self.config.model,
+                "messages": msgs,
+            })
+        } else {
+            serde_json::json!({
+                "model": self.config.model,
+                "messages": msgs,
+                "max_tokens": 512,
+                "temperature": 0.2,
+            })
+        };
+        let have_tools = if let Some(t) = tools {
+            if force_functions {
+                // Build legacy functions list
+                let mut functions: Vec<serde_json::Value> = Vec::new();
+                for tool in t.iter() {
+                    if let Some(obj) = tool.as_object() {
+                        if obj.get("type").and_then(|v| v.as_str()) == Some("function") {
+                            if let Some(func) = obj.get("function") {
+                                functions.push(func.clone());
+                            }
+                        }
+                    }
+                }
+                if !functions.is_empty() {
+                    payload["functions"] = serde_json::Value::Array(functions);
+                    payload["function_call"] = serde_json::json!("auto");
+                }
+            } else if !minimal_payload {
+                payload["tools"] = serde_json::Value::Array(t.to_vec());
+                if !disable_parallel {
+                    payload["parallel_tool_calls"] = serde_json::Value::Bool(true);
+                }
+            }
+            true
+        } else {
+            false
+        };
+        if !minimal_payload {
+            if let Some(choice) = &tool_choice {
+                payload["tool_choice"] = choice.clone();
+            } else if have_tools && !force_functions {
+                // Harmony: omit tool_choice to let server decide, unless override is provided
+                if let Some(tc) = tool_choice_override.as_deref() {
+                    match tc {
+                        "object:auto" => {
+                            payload["tool_choice"] = serde_json::json!({"type": "auto"})
+                        }
+                        "object:none" => {
+                            payload["tool_choice"] = serde_json::json!({"type": "none"})
+                        }
+                        "none" => payload["tool_choice"] = serde_json::json!("none"),
+                        "auto" => payload["tool_choice"] = serde_json::json!("auto"),
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        if std::env::var("VLLM_DEBUG_PAYLOAD").ok().as_deref() == Some("1") {
+            if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
+                debug!(target: "openai_chat", payload = %pretty, "request payload");
+            }
+        }
+        debug!(
+            target: "openai_chat",
+            url = %url,
+            model = %self.config.model,
+            have_tools = %have_tools,
+            force_functions = %force_functions,
+            tool_choice = %tool_choice.as_ref().map(|v| v.to_string()).unwrap_or_else(|| "<none>".into()),
+            messages_len = payload["messages"].as_array().map(|a| a.len()).unwrap_or(0),
+            "sending chat.completions"
+        );
+        let mut req1 = self.client.post(&url);
+        if let Some(token) = &self.auth_token {
+            req1 = req1.bearer_auth(token);
+        }
+        let resp1 = req1.json(&payload).send().await.map_err(AgentError::from)?;
+        let mut status = resp1.status();
+        let mut body_text = resp1.text().await.map_err(AgentError::from)?;
+        debug!(target: "openai_chat", "first attempt status={} have_tools={}", status, have_tools);
+
+        // Fallbacks for tool-related server errors
+        debug!(target: "openai_chat", "fallback check: success={} have_tools={}", status.is_success(), have_tools);
+        if !status.is_success() && have_tools {
+            tracing::debug!(
+                target = "openai_chat",
+                "entering fallback path; initial status={}",
+                status
+            );
+            // Legacy functions/function_call attempt
+            let mut functions: Vec<serde_json::Value> = Vec::new();
+            if let Some(tlist) = tools {
+                for tool in tlist.iter() {
+                    if let Some(obj) = tool.as_object() {
+                        if obj.get("type").and_then(|v| v.as_str()) == Some("function") {
+                            if let Some(func) = obj.get("function") {
+                                functions.push(func.clone());
+                            }
+                        }
+                    }
+                }
+            }
+            tracing::debug!(
+                target = "openai_chat",
+                functions_len = functions.len(),
+                "built legacy functions list"
+            );
+            if !functions.is_empty() {
+                let legacy_payload = serde_json::json!({
+                    "model": self.config.model,
+                    "messages": payload["messages"].clone(),
+                    "functions": serde_json::Value::Array(functions),
+                    "function_call": "auto",
+                    "max_tokens": 512,
+                    "temperature": 0.2,
+                });
+                if std::env::var("VLLM_DEBUG_PAYLOAD").ok().as_deref() == Some("1") {
+                    if let Ok(pretty) = serde_json::to_string_pretty(&legacy_payload) {
+                        tracing::debug!(target: "openai_chat", payload = %pretty, "legacy payload");
+                    }
+                }
+                let mut legacy_req = self.client.post(&url);
+                if let Some(token) = &self.auth_token {
+                    legacy_req = legacy_req.bearer_auth(token);
+                }
+                let resp2 = legacy_req
+                    .json(&legacy_payload)
+                    .send()
+                    .await
+                    .map_err(AgentError::from)?;
+                let status2 = resp2.status();
+                let body_text2 = resp2.text().await.map_err(AgentError::from)?;
+                tracing::debug!(target = "openai_chat", status = %status2, "legacy functions attempt complete");
+                status = status2;
+                body_text = body_text2;
+            }
+
+            // No-tools retry as last resort
+            if !status.is_success() {
+                let retry_payload = serde_json::json!({
+                    "model": self.config.model,
+                    "messages": payload["messages"].clone(),
+                    "max_tokens": 512,
+                    "temperature": 0.2,
+                });
+                if std::env::var("VLLM_DEBUG_PAYLOAD").ok().as_deref() == Some("1") {
+                    if let Ok(pretty) = serde_json::to_string_pretty(&retry_payload) {
+                        tracing::debug!(target: "openai_chat", payload = %pretty, "retry payload (no tools)");
+                    }
+                }
+                let mut retry_req = self.client.post(&url);
+                if let Some(token) = &self.auth_token {
+                    retry_req = retry_req.bearer_auth(token);
+                }
+                let resp3 = retry_req
+                    .json(&retry_payload)
+                    .send()
+                    .await
+                    .map_err(AgentError::from)?;
+                let status3 = resp3.status();
+                let body_text3 = resp3.text().await.map_err(AgentError::from)?;
+                tracing::debug!(target = "openai_chat", status = %status3, "no-tools retry attempt complete");
+                status = status3;
+                body_text = body_text3;
+            }
+        }
+
+        if !status.is_success() {
+            let truncated = if body_text.len() > 2000 {
+                format!("{}...<truncated>", &body_text[..2000])
+            } else {
+                body_text
+            };
+            debug!(target: "openai_chat", %status, model = %self.config.model, have_tools = %have_tools, error = %truncated, "chat.completions error");
+            return Err(AgentError::Other(format!(
+                "HTTP {} error: {}",
+                status, truncated
+            )));
+        }
+
+        match serde_json::from_str::<ChatCompletion>(&body_text) {
+            Ok(body) => Ok(parse_chat_completion(body)),
+            Err(_) => {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body_text) {
+                    let text = v
+                        .get("choices")
+                        .and_then(|c| c.as_array())
+                        .and_then(|arr| arr.get(0))
+                        .and_then(|c0| {
+                            c0.get("message")
+                                .and_then(|m| m.get("content"))
+                                .and_then(|t| t.as_str())
+                                .map(|s| s.to_string())
+                                .or_else(|| {
+                                    c0.get("text")
+                                        .and_then(|t| t.as_str())
+                                        .map(|s| s.to_string())
+                                })
+                        });
+                    return Ok(ModelResponse {
+                        id: None,
+                        text,
+                        tool_calls: vec![],
+                    });
+                }
+                Ok(ModelResponse {
+                    id: None,
+                    text: Some(body_text),
+                    tool_calls: vec![],
+                })
+            }
+        }
     }
 }
 

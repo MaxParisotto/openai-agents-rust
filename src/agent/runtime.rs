@@ -28,8 +28,19 @@ impl AgentRuntime {
         // Demo tool – uppercase
         tools.register(crate::tools::function::FunctionTool::new(
             "uppercase",
-            "Uppercase the input string",
-            |s| Ok(s.to_uppercase()),
+            "Uppercase the input string. Expects JSON: {\"text\": string}",
+            |s| {
+                // Try to parse OpenAI tool call args as JSON: {"text": "..."}
+                let text = serde_json::from_str::<serde_json::Value>(s)
+                    .ok()
+                    .and_then(|v| {
+                        v.get("text")
+                            .and_then(|t| t.as_str())
+                            .map(|t| t.to_string())
+                    })
+                    .unwrap_or_else(|| s.to_string());
+                Ok(text.to_uppercase())
+            },
         ));
 
         Self {

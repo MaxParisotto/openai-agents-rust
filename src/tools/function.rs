@@ -1,7 +1,7 @@
-use async_trait::async_trait;
+use crate::agent::traits::AgentContext;
 use crate::error::AgentError;
 use crate::tools::traits::Tool;
-use crate::agent::traits::AgentContext;
+use async_trait::async_trait;
 use serde_json::json;
 
 pub struct FunctionTool<F>
@@ -38,21 +38,35 @@ impl<F> Tool for FunctionTool<F>
 where
     F: Fn(&str) -> Result<String, AgentError> + Send + Sync + 'static,
 {
-    fn name(&self) -> &str { &self.name }
-    fn description(&self) -> &str { &self.description }
+    fn name(&self) -> &str {
+        &self.name
+    }
+    fn description(&self) -> &str {
+        &self.description
+    }
     fn openai_tool_spec(&self) -> Option<serde_json::Value> {
         Some(json!({
             "type": "function",
             "function": {
                 "name": self.name,
                 "description": self.description,
-                // Parameters schema unknown here; default to object allowing anything.
-                "parameters": {"type": "object", "additionalProperties": true}
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "text": {"type": "string", "description": "Text to transform."}
+                    },
+                    "required": ["text"],
+                    "additionalProperties": false
+                }
             }
         }))
     }
-    async fn is_enabled(&self, _ctx: &AgentContext) -> bool { self.enabled }
-    async fn call(&self, input: &str) -> Result<String, AgentError> { (self.func)(input) }
+    async fn is_enabled(&self, _ctx: &AgentContext) -> bool {
+        self.enabled
+    }
+    async fn call(&self, input: &str) -> Result<String, AgentError> {
+        (self.func)(input)
+    }
     async fn call_with_context(
         &self,
         _ctx: &AgentContext,

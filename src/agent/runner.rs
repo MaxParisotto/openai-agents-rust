@@ -91,7 +91,7 @@ impl Runner {
         }
 
         // No tool output or no tools available; call the model directly.
-        let mut combined_input = if tool_results.is_empty() {
+        let combined_input = if tool_results.is_empty() {
             input.to_string()
         } else {
             let mut agg = String::from(input);
@@ -120,6 +120,11 @@ impl Runner {
                 }
             }
         }
+        // Compatibility: allow disabling passing tools to the LLM via env flag
+        let disable_tools_in_llm = std::env::var("VLLM_DISABLE_TOOLS_IN_LLM")
+            .ok()
+            .map(|v| v == "1")
+            .unwrap_or(false);
         for _turn in 0..max_turns {
             let resp = model
                 .get_response(
@@ -127,7 +132,11 @@ impl Runner {
                     &combined_input,
                     None,
                     Some(&messages),
-                    Some(&tool_specs),
+                    if tool_specs.is_empty() || disable_tools_in_llm {
+                        None
+                    } else {
+                        Some(&tool_specs)
+                    },
                     None,
                     None,
                     None,
@@ -144,16 +153,29 @@ impl Runner {
                 return Ok(RunResult { text: resp.text });
             }
 
-            // Add assistant message with tool_calls for proper round-trip.
-            messages.push(json!({
-                "role": "assistant",
-                "content": resp.text.clone().unwrap_or_default(),
-                "tool_calls": resp.tool_calls.iter().map(|tc| json!({
-                    "id": tc.id,
-                    "type": "function",
-                    "function": {"name": tc.name, "arguments": tc.arguments},
-                })).collect::<Vec<_>>()
-            }));
+            // Add assistant message for proper round-trip.
+            let all_have_ids = resp.tool_calls.iter().all(|tc| tc.id.is_some());
+            if all_have_ids {
+                // Use tool_calls schema; set content to null per Harmony compatibility
+                messages.push(json!({
+                    "role": "assistant",
+                    "content": serde_json::Value::Null,
+                    "tool_calls": resp.tool_calls.iter().map(|tc| json!({
+                        "id": tc.id,
+                        "type": "function",
+                        "function": {"name": tc.name, "arguments": tc.arguments},
+                    })).collect::<Vec<_>>()
+                }));
+            } else {
+                // Legacy function_call schema supports only one function call per message.
+                if let Some(tc0) = resp.tool_calls.first() {
+                    messages.push(json!({
+                        "role": "assistant",
+                        "content": serde_json::Value::Null,
+                        "function_call": {"name": tc0.name, "arguments": tc0.arguments},
+                    }));
+                }
+            }
 
             // Execute requested tool calls if available.
             let mut executed_any_tool = false;
@@ -164,12 +186,20 @@ impl Runner {
                             .call_with_context(ctx, tc.id.as_deref(), &tc.arguments)
                             .await?;
                         // Append a proper tool message for the next model turn.
-                        messages.push(json!({
-                            "role": "tool",
-                            "tool_call_id": tc.id,
-                            "name": tc.name,
-                            "content": out
-                        }));
+                        if tc.id.is_some() {
+                            messages.push(json!({
+                                "role": "tool",
+                                "tool_call_id": tc.id,
+                                "content": out
+                            }));
+                        } else {
+                            // Legacy function message
+                            messages.push(json!({
+                                "role": "function",
+                                "name": tc.name,
+                                "content": out
+                            }));
+                        }
                         executed_any_tool = true;
                     }
                 }
@@ -188,7 +218,11 @@ impl Runner {
                 &combined_input,
                 None,
                 Some(&messages),
-                Some(&tool_specs),
+                if tool_specs.is_empty() || disable_tools_in_llm {
+                    None
+                } else {
+                    Some(&tool_specs)
+                },
                 None,
                 None,
                 None,

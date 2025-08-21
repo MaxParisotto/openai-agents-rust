@@ -1,13 +1,13 @@
-use async_trait::async_trait;
-use crate::error::AgentError;
 use crate::config::Config;
+use crate::error::AgentError;
 use crate::model::Model;
+use async_trait::async_trait;
 use reqwest::Client;
 
 /// Placeholder for a real‑time OpenAI model (e.g., audio transcription).
 pub struct OpenAiRealtime {
-    client: Client,
-    config: Config,
+    _client: Client,
+    _config: Config,
 }
 
 impl OpenAiRealtime {
@@ -16,7 +16,10 @@ impl OpenAiRealtime {
             .user_agent("openai-agents-rust")
             .build()
             .expect("Failed to build reqwest client");
-        Self { client, config }
+        Self {
+            _client: client,
+            _config: config,
+        }
     }
 }
 

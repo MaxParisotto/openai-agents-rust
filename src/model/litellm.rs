@@ -111,6 +111,7 @@ impl Model for LiteLLM {
                     "model": self.config.model,
                     "messages": msgs,
                     "max_tokens": 512,
+                    "temperature": 0.2,
                 });
                 if let Some(t) = tools {
                     payload["tools"] = serde_json::Value::Array(t.to_vec());
@@ -127,7 +128,7 @@ impl Model for LiteLLM {
         #[derive(Deserialize)]
         struct FunctionCall {
             name: String,
-            arguments: String,
+            arguments: serde_json::Value,
         }
         #[derive(Deserialize)]
         struct ToolCallJson {
@@ -140,6 +141,7 @@ impl Model for LiteLLM {
         struct Message {
             content: Option<String>,
             tool_calls: Option<Vec<ToolCallJson>>,
+            function_call: Option<FunctionCall>,
         }
         #[derive(Deserialize)]
         struct Choice {
@@ -150,27 +152,79 @@ impl Model for LiteLLM {
             choices: Vec<Choice>,
         }
 
-        let body: ChatCompletion = resp.json().await.map_err(AgentError::from)?;
-        let mut text: Option<String> = None;
-        let mut tool_calls: Vec<ToolCall> = Vec::new();
-        if let Some(first) = body.choices.into_iter().next() {
-            text = first.message.content;
-            if let Some(tcs) = first.message.tool_calls {
-                for tc in tcs.into_iter() {
-                    if let Some(func) = tc.function {
+        let status = resp.status();
+        let body_text = resp.text().await.map_err(AgentError::from)?;
+        if !status.is_success() {
+            return Err(AgentError::Other(format!(
+                "HTTP {} error: {}",
+                status, body_text
+            )));
+        }
+        match serde_json::from_str::<ChatCompletion>(&body_text) {
+            Ok(body) => {
+                let mut text: Option<String> = None;
+                let mut tool_calls: Vec<ToolCall> = Vec::new();
+                if let Some(first) = body.choices.into_iter().next() {
+                    text = first.message.content;
+                    if let Some(tcs) = first.message.tool_calls {
+                        for tc in tcs.into_iter() {
+                            if let Some(func) = tc.function {
+                                tool_calls.push(ToolCall {
+                                    id: tc.id,
+                                    name: func.name,
+                                    arguments: match func.arguments {
+                                        serde_json::Value::String(s) => s,
+                                        other => other.to_string(),
+                                    },
+                                });
+                            }
+                        }
+                    } else if let Some(func) = first.message.function_call {
                         tool_calls.push(ToolCall {
-                            id: tc.id,
+                            id: None,
                             name: func.name,
-                            arguments: func.arguments,
+                            arguments: match func.arguments {
+                                serde_json::Value::String(s) => s,
+                                other => other.to_string(),
+                            },
                         });
                     }
                 }
+                Ok(ModelResponse {
+                    id: None,
+                    text,
+                    tool_calls,
+                })
+            }
+            Err(_) => {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(&body_text) {
+                    let text = v
+                        .get("choices")
+                        .and_then(|c| c.as_array())
+                        .and_then(|arr| arr.get(0))
+                        .and_then(|c0| {
+                            c0.get("message")
+                                .and_then(|m| m.get("content"))
+                                .and_then(|t| t.as_str())
+                                .map(|s| s.to_string())
+                                .or_else(|| {
+                                    c0.get("text")
+                                        .and_then(|t| t.as_str())
+                                        .map(|s| s.to_string())
+                                })
+                        });
+                    return Ok(ModelResponse {
+                        id: None,
+                        text,
+                        tool_calls: vec![],
+                    });
+                }
+                Ok(ModelResponse {
+                    id: None,
+                    text: Some(body_text),
+                    tool_calls: vec![],
+                })
             }
         }
-        Ok(ModelResponse {
-            id: None,
-            text,
-            tool_calls,
-        })
     }
 }

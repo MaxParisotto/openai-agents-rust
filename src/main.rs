@@ -2,11 +2,11 @@ use std::{net::SocketAddr, sync::Arc};
 
 use tokio::sync::broadcast;
 
-use openai_agents_rust::agent::{self, runtime::AgentRuntime};
+use openai_agents_rust::agent::runtime::AgentRuntime;
 use openai_agents_rust::client::OpenAiClient;
 use openai_agents_rust::config::load_from_path;
 use openai_agents_rust::error::AgentError;
-use openai_agents_rust::mcp_server::{self, AppState, start_server};
+use openai_agents_rust::mcp_server::{AppState, start_server};
 use openai_agents_rust::plugin::loader::PluginRegistry;
 use openai_agents_rust::tracing::init_tracing;
 
