@@ -1,6 +1,8 @@
 use crate::config::Config;
 use crate::error::AgentError;
 use crate::model::{Model, ModelResponse, ToolCall};
+use crate::utils::env::var_bool;
+use crate::utils::env::var_opt;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::Deserialize;
@@ -169,21 +171,12 @@ impl Model for OpenAiChat {
         }
 
         // Env toggles for compatibility
-        let minimal_payload = std::env::var("VLLM_MIN_PAYLOAD")
-            .ok()
-            .map(|v| v == "1")
-            .unwrap_or(false);
-        let force_functions = std::env::var("VLLM_FORCE_FUNCTIONS")
-            .ok()
-            .map(|v| v == "1")
-            .unwrap_or(false);
+        let minimal_payload = var_bool("VLLM_MIN_PAYLOAD", false);
+        let force_functions = var_bool("VLLM_FORCE_FUNCTIONS", false);
         // Default to enabling parallel tool calls for Harmony unless explicitly disabled
-        let disable_parallel = std::env::var("VLLM_DISABLE_PARALLEL_TOOL_CALLS")
-            .ok()
-            .map(|v| v == "1")
-            .unwrap_or(false);
+        let disable_parallel = var_bool("VLLM_DISABLE_PARALLEL_TOOL_CALLS", false);
         // Optional override: Values: "auto", "none", "object:auto", "object:none"
-        let tool_choice_override = std::env::var("VLLM_TOOL_CHOICE").ok();
+        let tool_choice_override = var_opt("VLLM_TOOL_CHOICE");
 
         // Prepare payload
         let mut payload = if minimal_payload {
@@ -247,7 +240,7 @@ impl Model for OpenAiChat {
             }
         }
 
-        if std::env::var("VLLM_DEBUG_PAYLOAD").ok().as_deref() == Some("1") {
+        if var_bool("VLLM_DEBUG_PAYLOAD", false) {
             if let Ok(pretty) = serde_json::to_string_pretty(&payload) {
                 debug!(target: "openai_chat", payload = %pretty, "request payload");
             }
@@ -306,7 +299,7 @@ impl Model for OpenAiChat {
                     "max_tokens": 512,
                     "temperature": 0.2,
                 });
-                if std::env::var("VLLM_DEBUG_PAYLOAD").ok().as_deref() == Some("1") {
+                if var_bool("VLLM_DEBUG_PAYLOAD", false) {
                     if let Ok(pretty) = serde_json::to_string_pretty(&legacy_payload) {
                         tracing::debug!(target: "openai_chat", payload = %pretty, "legacy payload");
                     }
@@ -335,7 +328,7 @@ impl Model for OpenAiChat {
                     "max_tokens": 512,
                     "temperature": 0.2,
                 });
-                if std::env::var("VLLM_DEBUG_PAYLOAD").ok().as_deref() == Some("1") {
+                if var_bool("VLLM_DEBUG_PAYLOAD", false) {
                     if let Ok(pretty) = serde_json::to_string_pretty(&retry_payload) {
                         tracing::debug!(target: "openai_chat", payload = %pretty, "retry payload (no tools)");
                     }

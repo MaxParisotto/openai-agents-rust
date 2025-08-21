@@ -3,6 +3,7 @@ use crate::error::AgentError;
 use crate::model::Model;
 use crate::results::RunResult;
 use crate::tools::registry::ToolRegistry;
+use crate::utils::env::var_bool;
 use serde_json::json;
 
 /// Tool-use behavior modes analogous to the Python SDK behavior.
@@ -77,7 +78,19 @@ impl Runner {
         let (tool_results, early_final) =
             Self::run_tools_collect(&ctx.tools, ctx, input, &behavior).await?;
         if let Some(out) = early_final {
-            return Ok(RunResult { text: Some(out) });
+            if !tool_results.is_empty() {
+                tracing::info!(
+                    target: "runner",
+                    tool_count = tool_results.len(),
+                    tools = %serde_json::json!(tool_results),
+                    "early stop with tool outputs"
+                );
+            }
+            return Ok(RunResult {
+                id: None,
+                text: Some(out),
+                tool_outputs: tool_results,
+            });
         }
 
         // If custom behavior, allow it to decide final output.
@@ -85,7 +98,9 @@ impl Runner {
             let res = decider(ctx, &tool_results);
             if res.is_final_output {
                 return Ok(RunResult {
+                    id: None,
                     text: res.final_output,
+                    tool_outputs: vec![],
                 });
             }
         }
@@ -121,10 +136,11 @@ impl Runner {
             }
         }
         // Compatibility: allow disabling passing tools to the LLM via env flag
-        let disable_tools_in_llm = std::env::var("VLLM_DISABLE_TOOLS_IN_LLM")
-            .ok()
-            .map(|v| v == "1")
-            .unwrap_or(false);
+        let disable_tools_in_llm = var_bool("VLLM_DISABLE_TOOLS_IN_LLM", false);
+        let stateless_tools = var_bool("OSS_TOOL_OUTPUT_AS_TEXT", false);
+        let mut previous_response_id: Option<String> = None;
+        let mut disable_tools_next_turn = false;
+        let mut collected_tool_outputs: Vec<(String, String)> = tool_results.clone();
         for _turn in 0..max_turns {
             let resp = model
                 .get_response(
@@ -132,7 +148,7 @@ impl Runner {
                     &combined_input,
                     None,
                     Some(&messages),
-                    if tool_specs.is_empty() || disable_tools_in_llm {
+                    if tool_specs.is_empty() || disable_tools_in_llm || disable_tools_next_turn {
                         None
                     } else {
                         Some(&tool_specs)
@@ -141,70 +157,108 @@ impl Runner {
                     None,
                     None,
                     false,
-                    None,
+                    previous_response_id.as_deref(),
                     None,
                 )
                 .await?;
+
+            if let Some(rid) = &resp.id {
+                previous_response_id = Some(rid.clone());
+            }
 
             if resp.tool_calls.is_empty() {
                 if let Some(text) = &resp.text {
                     messages.push(json!({"role": "assistant", "content": text}));
                 }
-                return Ok(RunResult { text: resp.text });
+                return Ok(RunResult {
+                    id: resp.id,
+                    text: resp.text,
+                    tool_outputs: collected_tool_outputs,
+                });
             }
 
-            // Add assistant message for proper round-trip.
-            let all_have_ids = resp.tool_calls.iter().all(|tc| tc.id.is_some());
-            if all_have_ids {
-                // Use tool_calls schema; set content to null per Harmony compatibility
-                messages.push(json!({
-                    "role": "assistant",
-                    "content": serde_json::Value::Null,
-                    "tool_calls": resp.tool_calls.iter().map(|tc| json!({
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.name, "arguments": tc.arguments},
-                        "call_id": tc.call_id,
-                    })).collect::<Vec<_>>()
-                }));
-            } else {
-                // Legacy function_call schema supports only one function call per message.
-                if let Some(tc0) = resp.tool_calls.first() {
+            if !stateless_tools {
+                // Add assistant message for proper round-trip.
+                let all_have_ids = resp
+                    .tool_calls
+                    .iter()
+                    .all(|tc| tc.id.is_some() || tc.call_id.is_some());
+                if all_have_ids {
+                    // Use tool_calls schema; set content to null per Harmony compatibility
                     messages.push(json!({
                         "role": "assistant",
                         "content": serde_json::Value::Null,
-                        "function_call": {"name": tc0.name, "arguments": tc0.arguments},
+                        "tool_calls": resp.tool_calls.iter().map(|tc| json!({
+                            "id": tc.id.clone().or(tc.call_id.clone()),
+                            "type": "function",
+                            "function": {"name": tc.name, "arguments": tc.arguments},
+                            "call_id": tc.call_id,
+                        })).collect::<Vec<_>>()
                     }));
+                } else {
+                    // Legacy function_call schema supports only one function call per message.
+                    if let Some(tc0) = resp.tool_calls.first() {
+                        messages.push(json!({
+                            "role": "assistant",
+                            "content": serde_json::Value::Null,
+                            "function_call": {"name": tc0.name, "arguments": tc0.arguments},
+                        }));
+                    }
                 }
             }
 
             // Execute requested tool calls if available.
             let mut executed_any_tool = false;
-        for tc in resp.tool_calls {
+            let mut tool_outputs_texts: Vec<String> = Vec::new();
+            let mut _new_tool_outputs: Vec<(String, String)> = Vec::new();
+            for tc in resp.tool_calls {
                 if let Some(tool) = ctx.tools.get_by_name(&tc.name) {
                     if tool.is_enabled(ctx).await {
                         let out = tool
                             .call_with_context(ctx, tc.id.as_deref(), &tc.arguments)
                             .await?;
-                        // Append a proper tool message for the next model turn.
-            let link_id = tc.call_id.clone().or(tc.id.clone());
-            if link_id.is_some() {
-                            messages.push(json!({
-                                "role": "tool",
-                "tool_call_id": link_id,
-                                "content": out
-                            }));
+                        if stateless_tools {
+                            tool_outputs_texts.push(format!("Tool {} result:\n{}", tc.name, out));
+                            _new_tool_outputs.push((tc.name.clone(), out.clone()));
                         } else {
-                            // Legacy function message
-                            messages.push(json!({
-                                "role": "function",
-                                "name": tc.name,
-                                "content": out
-                            }));
+                            // Append a proper tool message for the next model turn.
+                            if let Some(link_id) = tc.call_id.clone().or(tc.id.clone()) {
+                                messages.push(json!({
+                                    "role": "tool",
+                                    "tool_call_id": link_id,
+                                    "content": out
+                                }));
+                            } else {
+                                // Legacy function message
+                                messages.push(json!({
+                                    "role": "function",
+                                    "name": tc.name,
+                                    "content": out
+                                }));
+                            }
+                            _new_tool_outputs.push((tc.name.clone(), out.clone()));
                         }
                         executed_any_tool = true;
                     }
                 }
+            }
+            if !_new_tool_outputs.is_empty() {
+                collected_tool_outputs.extend(_new_tool_outputs);
+                tracing::info!(
+                    target: "runner",
+                    total_tools = collected_tool_outputs.len(),
+                    last_batch = %serde_json::json!(collected_tool_outputs),
+                    "collected tool outputs"
+                );
+            }
+
+            if stateless_tools && !tool_outputs_texts.is_empty() {
+                let combined = tool_outputs_texts.join("\n\n");
+                messages.push(json!({
+                    "role": "assistant",
+                    "content": format!("I've run the requested tools. Here are the results. Please produce the final answer using them.\n\n{}", combined)
+                }));
+                disable_tools_next_turn = true;
             }
 
             if !executed_any_tool {
@@ -229,10 +283,88 @@ impl Runner {
                 None,
                 None,
                 false,
-                None,
+                previous_response_id.as_deref(),
                 None,
             )
             .await?;
-        Ok(RunResult { text: resp.text })
+        let res = RunResult {
+            id: resp.id,
+            text: resp.text,
+            tool_outputs: collected_tool_outputs,
+        };
+        if !res.tool_outputs.is_empty() {
+            tracing::info!(
+                target: "runner",
+                tool_count = res.tool_outputs.len(),
+                tools = %serde_json::json!(res.tool_outputs),
+                "final result with tool outputs"
+            );
+        }
+        Ok(res)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::agent::traits::AgentContext;
+    use crate::client::OpenAiClient;
+    use crate::config::Config;
+    use async_trait::async_trait;
+    use std::sync::Arc;
+
+    struct EchoTool;
+    #[async_trait]
+    impl crate::tools::traits::Tool for EchoTool {
+        fn name(&self) -> &str {
+            "echo"
+        }
+        async fn call(&self, input: &str) -> Result<String, crate::error::AgentError> {
+            Ok(input.to_string())
+        }
+    }
+
+    struct DummyModel;
+    #[async_trait]
+    impl Model for DummyModel {
+        async fn generate(&self, _prompt: &str) -> Result<String, crate::error::AgentError> {
+            Ok("ok".into())
+        }
+    }
+
+    #[tokio::test]
+    async fn runner_returns_tool_outputs_on_stop_first() {
+        let cfg = Config {
+            api_key: "".into(),
+            model: "dummy".into(),
+            base_url: "http://localhost".into(),
+            log_level: "info".into(),
+            plugins_path: std::env::temp_dir(),
+            max_concurrent_requests: None,
+        };
+        let client = Arc::new(OpenAiClient::new(cfg.clone()));
+        let plugins = Arc::new(crate::plugin::loader::PluginRegistry::new());
+        let mut reg = crate::tools::registry::ToolRegistry::new();
+        reg.register(EchoTool);
+        let ctx = AgentContext {
+            config: Arc::new(cfg),
+            client,
+            plugins,
+            tools: Arc::new(reg),
+        };
+        let model = DummyModel;
+        let res = Runner::run_agent_with_model(
+            &model,
+            &ctx,
+            None,
+            "hi",
+            ToolUseBehavior::StopOnFirstTool,
+        )
+        .await
+        .unwrap();
+        assert_eq!(res.text.as_deref(), Some("hi"));
+        assert_eq!(res.tool_outputs.len(), 1);
+        assert_eq!(res.tool_outputs[0].0, "echo");
+        assert_eq!(res.tool_outputs[0].1, "hi");
     }
 }

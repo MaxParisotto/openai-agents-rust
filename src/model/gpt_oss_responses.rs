@@ -1,6 +1,7 @@
 use crate::config::Config;
 use crate::error::AgentError;
 use crate::model::{Model, ModelResponse, ToolCall};
+use crate::utils::env::var_bool;
 use async_trait::async_trait;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -46,8 +47,10 @@ enum InputUnion {
 #[derive(Serialize)]
 #[serde(tag = "type")]
 enum InputItem {
+    #[allow(dead_code)]
     #[serde(rename = "message")]
     Message { role: String, content: String },
+    #[allow(dead_code)]
     #[serde(rename = "function_call")]
     FunctionCall {
         name: String,
@@ -92,6 +95,8 @@ struct ResponsesRequestBody {
     temperature: Option<f32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     previous_response_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    store: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -99,7 +104,8 @@ struct ResponsesRequestBody {
 enum OutputItem {
     #[serde(rename = "message")]
     Message {
-        role: String,
+        #[serde(rename = "role")]
+        _role: String,
         content: Vec<TextPart>,
     },
     #[serde(rename = "function_call")]
@@ -110,7 +116,12 @@ enum OutputItem {
         call_id: String,
     },
     #[serde(rename = "function_call_output")]
-    FunctionCallOutput { call_id: String, output: String },
+    FunctionCallOutput {
+        #[allow(dead_code)]
+        call_id: String,
+        #[allow(dead_code)]
+        output: String,
+    },
     #[serde(other)]
     Other,
 }
@@ -196,62 +207,8 @@ fn adapt_messages_to_input(messages: Option<&[serde_json::Value]>) -> InputUnion
                 }
                 _ => {}
             }
-            if let Some(tc_arr) = m.get("tool_calls").and_then(|v| v.as_array()) {
-                for tc in tc_arr {
-                    let id = tc.get("id").and_then(|v| v.as_str()).map(|s| s.to_string());
-                    let call_id = tc
-                        .get("call_id")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
-                        .or(id.clone());
-                    if let Some(function) = tc.get("function").and_then(|v| v.as_object()) {
-                        let name = function
-                            .get("name")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let arguments = function
-                            .get("arguments")
-                            .map(|v| {
-                                if v.is_string() {
-                                    v.as_str().unwrap().to_string()
-                                } else {
-                                    v.to_string()
-                                }
-                            })
-                            .unwrap_or("{}".to_string());
-                        items.push(InputItem::FunctionCall {
-                            name,
-                            arguments,
-                            id,
-                            call_id,
-                        });
-                    }
-                }
-            }
-            if let Some(func) = m.get("function_call").and_then(|v| v.as_object()) {
-                let name = func
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let arguments = func
-                    .get("arguments")
-                    .map(|v| {
-                        if v.is_string() {
-                            v.as_str().unwrap().to_string()
-                        } else {
-                            v.to_string()
-                        }
-                    })
-                    .unwrap_or("{}".to_string());
-                items.push(InputItem::FunctionCall {
-                    name,
-                    arguments,
-                    id: None,
-                    call_id: None,
-                });
-            }
+            // Do not inject function_call items into input for OSS Responses.
+            // The model server expects function_call_output linked via previous_response_id.
         }
         if items.is_empty() {
             InputUnion::Str("".into())
@@ -280,6 +237,7 @@ impl Model for GptOssResponses {
             max_output_tokens: Some(512),
             temperature: Some(0.2),
             previous_response_id: None,
+            store: None,
         };
         let resp = req.json(&body).send().await.map_err(AgentError::from)?;
         let status = resp.status();
@@ -315,6 +273,8 @@ impl Model for GptOssResponses {
         let input = adapt_messages_to_input(messages);
         let tools_mapped = map_openai_tools_to_oss(tools);
         let tool_choice_str = tool_choice.and_then(|v| v.as_str().map(|s| s.to_string()));
+        let disable_prev = var_bool("OSS_DISABLE_PREVIOUS_RESPONSE", false)
+            || var_bool("OSS_TOOL_OUTPUT_AS_TEXT", false);
         let body = ResponsesRequestBody {
             instructions: system_instructions.map(|s| s.to_string()),
             input,
@@ -324,24 +284,45 @@ impl Model for GptOssResponses {
             parallel_tool_calls: Some(true),
             max_output_tokens: Some(512),
             temperature: Some(0.2),
-            previous_response_id: _previous_response_id.map(|s| s.to_string()),
+            previous_response_id: if disable_prev {
+                None
+            } else {
+                _previous_response_id.map(|s| s.to_string())
+            },
+            store: if disable_prev { None } else { Some(true) },
         };
+        if var_bool("OSS_DEBUG_PAYLOAD", false) {
+            if let Ok(j) = serde_json::to_string_pretty(&body) {
+                tracing::debug!(target = "gpt_oss_responses", payload = %j, "OSS Responses request body");
+            }
+        }
+        if var_bool("OSS_DEBUG_HTTP", false) {
+            if let Ok(j) = serde_json::to_string_pretty(&body) {
+                eprintln!("OSS Responses REQUEST: {}", j);
+            }
+        }
         let resp = req.json(&body).send().await.map_err(AgentError::from)?;
         let status = resp.status();
         let body_text = resp.text().await.map_err(AgentError::from)?;
+        if var_bool("OSS_DEBUG_PAYLOAD", false) {
+            tracing::debug!(target = "gpt_oss_responses", http_status = %status, body = %body_text, "OSS Responses response");
+        }
+        if var_bool("OSS_DEBUG_HTTP", false) {
+            eprintln!("OSS Responses HTTP {} body: {}", status, body_text);
+        }
         if !status.is_success() {
             return Err(AgentError::Other(format!(
                 "HTTP {} error: {}",
                 status, body_text
             )));
         }
-    let parsed: ResponsesObject = serde_json::from_str(&body_text).map_err(AgentError::from)?;
+        let parsed: ResponsesObject = serde_json::from_str(&body_text).map_err(AgentError::from)?;
         let mut text: Option<String> = None;
         let mut tool_calls: Vec<ToolCall> = Vec::new();
-    let resp_id = parsed.id.clone();
+        let resp_id = parsed.id.clone();
         for item in parsed.output.into_iter() {
             match item {
-                OutputItem::Message { role: _, content } => {
+                OutputItem::Message { _role: _, content } => {
                     let mut s = String::new();
                     for p in content {
                         s.push_str(&p.text);
@@ -366,6 +347,10 @@ impl Model for GptOssResponses {
                 _ => {}
             }
         }
-    Ok(ModelResponse { id: resp_id, text, tool_calls })
+        Ok(ModelResponse {
+            id: resp_id,
+            text,
+            tool_calls,
+        })
     }
 }

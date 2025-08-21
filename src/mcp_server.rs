@@ -70,9 +70,17 @@ async fn run_handler(
     Ok(Json(RunResponse { result }))
 }
 
-/// Handler for `/status/:session_id` – placeholder returning a static status.
-async fn status_handler(Path(_session_id): Path<String>) -> impl IntoResponse {
-    Json(serde_json::json!({ "status": "running" }))
+/// Handler for `/status/:session_id` – returns basic liveness and session echo.
+async fn status_handler(
+    Path(session_id): Path<String>,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    let subscriber_count = state.broadcaster.receiver_count();
+    Json(serde_json::json!({
+        "status": "running",
+        "session_id": session_id,
+        "subscribers": subscriber_count,
+    }))
 }
 
 /// Handler for `/events/:session_id` – Server‑Sent Events stream.

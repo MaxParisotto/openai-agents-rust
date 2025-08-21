@@ -39,7 +39,7 @@ pub fn register_default_agent(runtime: &mut AgentRuntime) {
     let agent = EchoAgent::new(model);
     runtime.register(agent);
 
-    // Also register a configured agent using the realtime placeholder model.
+    // Also register a configured agent using the realtime experimental model.
     let rt_model = crate::model::openai_realtime::OpenAiRealtime::new((*runtime.config).clone());
     let configured = crate::agent::configured::ConfiguredAgent::new("configured", rt_model);
     runtime.register(configured);

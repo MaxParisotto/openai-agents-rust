@@ -1,1 +1,1 @@
-// Utility module placeholder – can contain shared helpers.
+pub mod env;

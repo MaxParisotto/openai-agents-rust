@@ -4,7 +4,7 @@ use crate::model::Model;
 use async_trait::async_trait;
 use reqwest::Client;
 
-/// Placeholder for a real‑time OpenAI model (e.g., audio transcription).
+/// Experimental real‑time OpenAI model (e.g., audio transcription).
 pub struct OpenAiRealtime {
     _client: Client,
     _config: Config,

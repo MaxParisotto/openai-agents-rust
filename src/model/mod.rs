@@ -21,12 +21,12 @@ pub trait Model: Send + Sync {
         &self,
         system_instructions: Option<&str>,
         input: &str,
-        _model_settings: Option<HashMap<String, String>>, // placeholder
-        _messages: Option<&[Value]>,                      // chat messages for full fidelity
-        _tools: Option<&[Value]>,                         // OpenAI tool specs
-        _tool_choice: Option<Value>,                      // tool_choice config
-        _output_schema: Option<&str>,                     // placeholder
-        _handoffs: Option<&[String]>,                     // placeholder
+        _model_settings: Option<HashMap<String, String>>,
+        _messages: Option<&[Value]>, // chat messages for full fidelity
+        _tools: Option<&[Value]>,    // OpenAI tool specs
+        _tool_choice: Option<Value>, // tool_choice config
+        _output_schema: Option<&str>,
+        _handoffs: Option<&[String]>,
         _tracing_enabled: bool,
         _previous_response_id: Option<&str>,
         _prompt_config: Option<&str>,
